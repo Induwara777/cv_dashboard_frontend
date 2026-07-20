@@ -6,6 +6,7 @@ import { FilePlus2, FileText, X, Search } from "lucide-react";
 interface UploadedFile {
   id: string;
   name: string;
+  file: File;
 }
 
 /* ---------- Single-file drop zone (used for Job Spec) ---------- */
@@ -15,6 +16,7 @@ interface SingleDropZoneProps {
   file: UploadedFile | null;
   onFileSelected: (file: File) => void;
   onRemove: () => void;
+  accept?: string;
 }
 
 function SingleDropZone({
@@ -22,6 +24,7 @@ function SingleDropZone({
   file,
   onFileSelected,
   onRemove,
+  accept = "application/pdf",
 }: SingleDropZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -73,7 +76,7 @@ function SingleDropZone({
       <input
         ref={inputRef}
         type="file"
-        accept="application/pdf"
+        accept={accept}
         className="hidden"
         onChange={handleInputChange}
       />
@@ -220,6 +223,10 @@ function MultiDropZone({
 export default function DocumentUploader() {
   const [resumes, setResumes] = useState<UploadedFile[]>([]);
   const [jobSpec, setJobSpec] = useState<UploadedFile | null>(null);
+  const [status, setStatus] = useState<
+    "idle" | "analyzing" | "completed" | "error"
+  >("idle");
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   const canAnalyze = resumes.length > 0 && Boolean(jobSpec);
 
@@ -227,6 +234,7 @@ export default function DocumentUploader() {
     const next = files.map((file) => ({
       id: crypto.randomUUID(),
       name: file.name,
+      file,
     }));
 
     setResumes((prev) => [...prev, ...next]);
@@ -236,13 +244,35 @@ export default function DocumentUploader() {
     setResumes((prev) => prev.filter((file) => file.id !== id));
   };
 
-  const handleAnalyze = () => {
-    if (!canAnalyze) return;
+  const handleAnalyze = async () => {
+    if (!canAnalyze || !jobSpec) return;
 
-    console.log({
-      resumes,
-      jobSpec,
-    });
+    setStatus("analyzing");
+
+    try {
+      const formData = new FormData();
+      resumes.forEach((resume) => formData.append("resumes", resume.file));
+      formData.append("job_spec", jobSpec.file);
+
+      const res = await fetch("http://localhost:8000/analyze", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) throw new Error(`Request failed with ${res.status}`);
+
+      const data = await res.json();
+
+      if (data.status === "completed") {
+        setSessionId(data.session_id);
+        setStatus("completed");
+      } else {
+        setStatus("error");
+      }
+    } catch (err) {
+      console.error(err);
+      setStatus("error");
+    }
   };
 
   return (
@@ -266,12 +296,14 @@ export default function DocumentUploader() {
             />
 
             <SingleDropZone
-              label="Target Job Spec (PDF)"
+              label="Target Job Spec (JSON)"
               file={jobSpec}
+              accept="application/json"
               onFileSelected={(file) =>
                 setJobSpec({
                   id: crypto.randomUUID(),
                   name: file.name,
+                  file,
                 })
               }
               onRemove={() => setJobSpec(null)}
@@ -281,19 +313,56 @@ export default function DocumentUploader() {
           <button
             type="button"
             onClick={handleAnalyze}
-            disabled={!canAnalyze}
+            disabled={!canAnalyze || status === "analyzing"}
             className={[
               "mt-4 flex w-full items-center justify-center gap-2 rounded-full py-3.5",
               "text-[15px] font-bold text-white transition-opacity",
               "bg-gradient-to-b from-rose-600 to-rose-800 shadow-lg shadow-rose-900/20",
-              canAnalyze
+              canAnalyze && status !== "analyzing"
                 ? "opacity-100 hover:opacity-90"
                 : "cursor-not-allowed opacity-50",
             ].join(" ")}
           >
             <Search className="h-4 w-4" strokeWidth={2.5} />
-            Analyze Candidates
+            {status === "analyzing" ? "Analyzing…" : "Analyze Candidates"}
           </button>
+
+          {status === "completed" && sessionId && (
+            <div className="mt-3 text-center">
+              <p className="text-sm font-semibold text-emerald-600">
+                Data extraction completed
+              </p>
+              <a
+                href={`http://localhost:8000/download/excel/${sessionId}`}
+                download
+                className="mt-1 inline-block text-sm font-semibold text-slate-700 underline hover:text-slate-900"
+              >
+                Download Excel
+              </a>
+              <br />
+              <a
+                href={`http://localhost:8000/download/masked/${sessionId}`}
+                download
+                className="mt-1 inline-block text-xs font-medium text-slate-400 underline hover:text-slate-600"
+              >
+                Download masked data
+              </a>
+              <br />
+              <a
+                href={`http://localhost:8000/download/details/${sessionId}`}
+                download
+                className="mt-1 inline-block text-xs font-medium text-slate-400 underline hover:text-slate-600"
+              >
+                Download final CV details
+              </a>
+            </div>
+          )}
+
+          {status === "error" && (
+            <p className="mt-3 text-center text-sm font-semibold text-rose-600">
+              Something went wrong. Please try again.
+            </p>
+          )}
         </div>
       </div>
     </div>
