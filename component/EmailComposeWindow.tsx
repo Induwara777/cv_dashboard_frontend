@@ -13,31 +13,39 @@ import type { Candidate } from "./CandidateLeaderBoard";
  * email before it goes out. Nothing is marked "accepted" until Send Email
  * is actually clicked.
  *
+ * DATA:
+ *   Candidate is fetched from GET /candidates/:id, same as the detail page.
+ *   The "TO" field is pre-filled from the candidate's extracted email when
+ *   available, but the reviewer can still edit it before sending.
+ *
  * AUTOSAVE:
- *   Subject/body edits are written into sessionStorage on every change
- *   (`email-draft:<id>`), so navigating away and back keeps the draft.
+ *   Subject/body/toEmail edits are still kept in sessionStorage
+ *   (`email-draft:<id>`) purely as a local convenience so navigating away
+ *   and back keeps the draft. This is not decision state, so it's fine to
+ *   leave client-side.
  *
- * ON SEND (temporary, until backend/email service is connected):
- *   - candidate:<id>            → status set to "accepted"
- *   - candidate:<id>:notice     → "email-sent" (one-shot banner flag read
- *                                  by CandidateDetailWindow)
- *   - email-draft:<id>          → cleared
- *   Then navigates back to /candidate/<id>.
+ * ON SEND:
+ *   POSTs { decision: "accepted" } to /candidates/:id/decision — the
+ *   backend is the one that actually flips status now, not sessionStorage.
+ *   Then clears the local draft and navigates back to
+ *   /candidate/:id?notice=email-sent so the detail page shows the banner.
  *
- * SWAP-IN POINT FOR REAL BACKEND:
- *   Replace the setTimeout "fake send" in handleSend with something like:
- *
- *     await fetch(`/api/candidates/${id}/send-invitation`, {
- *       method: "POST",
- *       headers: { "Content-Type": "application/json" },
- *       body: JSON.stringify({ subject, body }),
- *     });
- *
- *   and let the API be the one that flips the candidate's status server-side.
+ * NOTE: this does not yet actually dispatch an email (no SMTP/email-service
+ * call exists in the backend). It only records the accept decision. Wire
+ * up a real send (e.g. a /candidates/:id/send-invitation endpoint) when
+ * you're ready to actually deliver the email.
  */
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
+// Single source of truth for the sender address — used both in the
+// read-only FROM field and the signature, so they can't drift out of sync
+// like they had (FROM was invisible entirely, and the signature used a
+// different address).
+const SENDER_EMAIL = "induwaradilshan7@gmail.com";
+
 const SIGNATURE =
-  "Best regards,\nInduwara Dilshan,\nSenior HR Manager,\nCitizens Development Business Finance PLC.\ninduwara@gmail.com";
+  `Best regards,\nInduwara Dilshan,\nSenior HR Manager,\nCitizens Development Business Finance PLC.\n${SENDER_EMAIL}`;
 
 function buildDefaultSubject(): string {
   return "Interview Invitation – [Job Title]";
@@ -78,7 +86,9 @@ export default function EmailComposeWindow() {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   useEffect(() => {
     const id = getIdFromPath();
@@ -89,26 +99,44 @@ export default function EmailComposeWindow() {
       return;
     }
 
-    try {
-      const raw = sessionStorage.getItem(`candidate:${id}`);
-      const data: Candidate | null = raw ? JSON.parse(raw) : null;
-      setCandidate(data);
+    let cancelled = false;
 
-      // Resume a draft if one exists, otherwise start from the template.
-      const draftRaw = sessionStorage.getItem(`email-draft:${id}`);
-      const draft = draftRaw ? JSON.parse(draftRaw) : null;
+    async function loadCandidate(candidateId: string) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/candidates/${candidateId}`);
+        if (res.status === 404) {
+          if (!cancelled) setCandidate(null);
+          return;
+        }
+        if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
+        const data: Candidate = await res.json();
+        if (cancelled) return;
 
-      setToEmail(draft?.toEmail ?? data?.email ?? "");
-      setSubject(draft?.subject ?? buildDefaultSubject());
-      setBody(draft?.body ?? buildDefaultBody(data?.name ?? "[Candidate Name]"));
-    } catch (err) {
-      console.error("Failed to load candidate/draft from sessionStorage", err);
-    } finally {
-      setLoading(false);
+        setCandidate(data);
+
+        // Resume a local draft if one exists, otherwise start from the template.
+        const draftRaw = sessionStorage.getItem(`email-draft:${id}`);
+        const draft = draftRaw ? JSON.parse(draftRaw) : null;
+
+        setToEmail(draft?.toEmail ?? data?.email ?? "");
+        setSubject(draft?.subject ?? buildDefaultSubject());
+        setBody(draft?.body ?? buildDefaultBody(data?.name ?? "[Candidate Name]"));
+      } catch (err) {
+        console.error("Failed to load candidate", err);
+        if (!cancelled) setLoadError("Couldn't load this candidate. Is the API running?");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
+
+    loadCandidate(id);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Autosave on every edit.
+  // Autosave the draft locally on every edit (not decision state — just a
+  // convenience so a refresh doesn't lose typed text).
   useEffect(() => {
     if (!candidateId || loading) return;
     try {
@@ -126,25 +154,28 @@ export default function EmailComposeWindow() {
     router.push(`/candidate/${candidateId}`);
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!candidateId || !candidate) return;
     if (!toEmail.trim()) return; // require a recipient before sending
     setSending(true);
+    setSendError(null);
 
-    // TODO: replace with a real API call — see comment block above.
-    // Faked delay so the "Sending…" state is visible.
-    setTimeout(() => {
-      try {
-        const updated: Candidate = { ...candidate, status: "accepted" };
-        sessionStorage.setItem(`candidate:${candidateId}`, JSON.stringify(updated));
-        sessionStorage.setItem(`candidate:${candidateId}:notice`, "email-sent");
-        sessionStorage.removeItem(`email-draft:${candidateId}`);
-      } catch (err) {
-        console.error("Failed to finalize email send", err);
-      }
+    try {
+      const res = await fetch(`${API_BASE_URL}/candidates/${candidateId}/decision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: "accepted" }),
+      });
+      if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
 
-      router.push(`/candidate/${candidateId}`);
-    }, 500);
+      sessionStorage.removeItem(`email-draft:${candidateId}`);
+      router.push(`/candidate/${candidateId}?notice=email-sent`);
+    } catch (err) {
+      console.error("Failed to record accept decision", err);
+      setSendError("Couldn't send — the decision wasn't saved. Try again.");
+    } finally {
+      setSending(false);
+    }
   };
 
   if (loading) {
@@ -155,10 +186,10 @@ export default function EmailComposeWindow() {
     );
   }
 
-  if (!candidate || !candidateId) {
+  if (loadError || !candidate || !candidateId) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-50 px-6 text-center text-sm text-slate-400">
-        <div>No candidate data found for this page.</div>
+        <div>{loadError ?? "No candidate data found for this page."}</div>
         <Link
           href="/"
           className="rounded-full border border-slate-300 px-4 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
@@ -189,6 +220,18 @@ export default function EmailComposeWindow() {
         </div>
 
         <div className="px-7 py-6">
+          <label className="mb-1.5 block text-xs font-bold tracking-wide text-slate-500">
+            FROM
+          </label>
+          <input
+            type="email"
+            value={SENDER_EMAIL}
+            readOnly
+            disabled
+            title="Sender address is fixed and can't be changed here"
+            className="mb-5 w-full cursor-not-allowed rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm text-slate-500"
+          />
+
           <label className="mb-1.5 block text-xs font-bold tracking-wide text-slate-500">
             TO
           </label>
@@ -223,6 +266,12 @@ export default function EmailComposeWindow() {
             Edits save automatically. Fill in the bracketed placeholders (job
             title, date, time, format, location) before sending.
           </p>
+
+          {sendError && (
+            <div className="mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-700">
+              {sendError}
+            </div>
+          )}
 
           <div className="mt-6 flex justify-end gap-3 border-t border-slate-200 pt-5">
             <button

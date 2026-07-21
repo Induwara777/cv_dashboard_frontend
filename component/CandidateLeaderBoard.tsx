@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
 export interface CandidateScores {
   education: number; // out of 15
   experience: number; // out of 40
@@ -14,92 +16,67 @@ export interface CandidateScores {
 export interface Candidate {
   id: string;
   rank: number;
-  name: string;
+  name: string; // derived from the CV filename on the backend — never a real extracted name
   score: number; // out of 100
-
-  // ---- Not sent by backend yet — optional until that's connected ----
-  email?: string;
-  location?: string;
-  scores?: CandidateScores;
   status?: "pending" | "accepted" | "rejected";
+
+  // Everything below is only present on the detail endpoint
+  // (GET /candidates/:id), not the leaderboard list (GET /candidates) —
+  // see db.py's get_candidate_details() vs getting_details_from_db().
+  scores?: CandidateScores;
+  email?: string | null;
+  phone?: string | null;
+  location?: string | null;
+  validation_status?: string;
 }
 
 interface CandidateLeaderboardProps {
-  candidates?: Candidate[];
   onViewAnalysis?: (candidate: Candidate) => void;
+  /**
+   * Bump this (e.g. refreshKey + 1) from the parent whenever new analysis
+   * results have landed on the backend — after a successful /analyze call,
+   * for example. This component has no other way of knowing new data
+   * exists, since its own fetch only runs once on mount otherwise.
+   */
+  refreshKey?: number;
 }
 
-
-/* Placeholder data — remove once connected to backend */
-const MOCK_CANDIDATES: Candidate[] = [
-  {
-    id: "1",
-    rank: 1,
-    name: "Dilani Perera",
-    score: 92,
-    email: "dilani@email.com",
-    location: "Colombo, Sri Lanka",
-    scores: { education: 15, experience: 38, tech: 32, softSkills: 4, impact: 3 },
-  },
-  {
-    id: "2",
-    rank: 2,
-    name: "Ashan Fernando",
-    score: 87,
-    email: "ashan@email.com",
-    location: "Kandy, Sri Lanka",
-    scores: { education: 14, experience: 35, tech: 30, softSkills: 4, impact: 4 },
-  },
-  {
-    id: "3",
-    rank: 3,
-    name: "Nadeesha Silva",
-    score: 40,
-    email: "nadeesha@email.com",
-    location: "Galle, Sri Lanka",
-    scores: { education: 10, experience: 15, tech: 10, softSkills: 3, impact: 2 },
-  },
-];
-
-
-
 export default function CandidateLeaderboard({
-
-  candidates = MOCK_CANDIDATES,
-
   onViewAnalysis,
-
+  refreshKey,
 }: CandidateLeaderboardProps) {
-
   const router = useRouter();
 
-  // Tracks each candidate's Accept/Reject decision, keyed by candidate id.
-  //
-  // TEMP source of truth until backend exists: CandidateDetailWindow writes
-  // the decision back into sessionStorage["candidate:<id>"] when Accept/
-  // Reject is clicked. This reads that back in on mount (i.e. whenever the
-  // reviewer lands on/returns to this page) so the STATUS column reflects
-  // it. Once a real API exists, replace this whole effect with fetching the
-  // candidates list (which will already include each one's status) instead.
-  const [statusById, setStatusById] = useState<
-    Record<string, NonNullable<Candidate["status"]>>
-  >({});
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const next: Record<string, NonNullable<Candidate["status"]>> = {};
+    let cancelled = false;
 
-    candidates.forEach((c) => {
+    async function loadCandidates() {
+      setLoading(true);
+      setError(null);
       try {
-        const raw = sessionStorage.getItem(`candidate:${c.id}`);
-        const stored: Candidate | null = raw ? JSON.parse(raw) : null;
-        next[c.id] = stored?.status ?? c.status ?? "pending";
-      } catch {
-        next[c.id] = c.status ?? "pending";
+        const res = await fetch(`${API_BASE_URL}/candidates`);
+        if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
+        const data: Candidate[] = await res.json();
+        if (!cancelled) setCandidates(data);
+      } catch (err) {
+        console.error("Failed to load candidates", err);
+        if (!cancelled) setError("Couldn't load candidates. Is the API running?");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    });
+    }
 
-    setStatusById(next);
-  }, [candidates]);
+    loadCandidates();
+    return () => {
+      cancelled = true;
+    };
+    // Refetch whenever refreshKey changes (e.g. after a new /analyze run
+    // completes), in addition to the initial mount fetch.
+  }, [refreshKey]);
 
   // Maps a decision status to its display label + badge styling.
   const getStatusMeta = (status: NonNullable<Candidate["status"]>) => {
@@ -112,73 +89,31 @@ export default function CandidateLeaderboard({
     return { label: "Not Yet", className: "border-slate-300 bg-slate-50 text-slate-500" };
   };
 
-
   // Score badge color function
-  const getScoreStyle = (score:number)=>{
-
-    if(score >= 85){
-
-      return (
-        "border-emerald-300 bg-emerald-50 text-emerald-700"
-      );
-
+  const getScoreStyle = (score: number) => {
+    if (score >= 85) {
+      return "border-emerald-300 bg-emerald-50 text-emerald-700";
     }
-
-
-    if(score >= 70){
-
-      return (
-        "border-blue-300 bg-blue-50 text-blue-700"
-      );
-
+    if (score >= 70) {
+      return "border-blue-300 bg-blue-50 text-blue-700";
     }
-
-
-    if(score >= 50){
-
-      return (
-        "border-amber-300 bg-amber-50 text-amber-700"
-      );
-
+    if (score >= 50) {
+      return "border-amber-300 bg-amber-50 text-amber-700";
     }
-
-
-    return (
-      "border-red-300 bg-red-50 text-red-700"
-    );
-
+    return "border-red-300 bg-red-50 text-red-700";
   };
 
-
-  // Navigates to the candidate's full analysis page (same tab/window).
-  //
-  // TEMP hand-off until backend exists: the candidate record is stashed in
-  // sessionStorage under `candidate:<id>` so the /candidate/[id] page (a
-  // separate component with no access to this component's React state) can
-  // read it. Once a real API exists, delete the sessionStorage.setItem call
-  // below — the details page will just fetch `/api/candidates/:id` itself.
+  // Navigates to the candidate's full analysis page. The detail page fetches
+  // its own data from /candidates/:id, so nothing needs to be stashed here
+  // anymore.
   const handleViewAnalysis = (candidate: Candidate) => {
-    try {
-      sessionStorage.setItem(
-        `candidate:${candidate.id}`,
-        JSON.stringify(candidate)
-      );
-    } catch (err) {
-      console.error("Failed to stash candidate for analysis page", err);
-    }
-
     router.push(`/candidate/${candidate.id}`);
-
-    // Let the parent app hook in too (analytics, logging, etc.) if it wants.
     onViewAnalysis?.(candidate);
   };
 
-
-
-
   return (
-
-    <div className="
+    <div
+      className="
       w-full 
       max-w-3xl 
       overflow-hidden 
@@ -188,37 +123,31 @@ export default function CandidateLeaderboard({
       shadow-slate-300/40 
       ring-1 
       ring-slate-200
-    ">
-
-
+    "
+    >
       {/* Header */}
-
-      <div className="
+      <div
+        className="
         bg-slate-900 
         px-7 
         py-5
-      ">
-
-        <h2 className="
+      "
+      >
+        <h2
+          className="
           text-sm 
           font-bold 
           tracking-[0.14em] 
           text-white
-        ">
-
+        "
+        >
           CANDIDATE LEADERBOARD
-
         </h2>
-
-
       </div>
 
-
-
-
       {/* Column headers */}
-
-      <div className="
+      <div
+        className="
         grid 
         grid-cols-[48px_1.4fr_0.7fr_0.9fr_0.9fr]
         gap-4 
@@ -230,64 +159,43 @@ export default function CandidateLeaderboard({
         font-bold 
         tracking-wider 
         text-slate-400
-      ">
-
-
+      "
+      >
         <span>#</span>
-
         <span>CANDIDATE</span>
-
         <span>SCORE</span>
-
         <span>STATUS</span>
-
-        <span className="text-right">
-          ANALYSIS
-        </span>
-
-
+        <span className="text-right">ANALYSIS</span>
       </div>
 
-
-
-
-
-      {/* Candidate rows */}
-
-      {
-        candidates.length === 0 ? (
-
-          <div className="
+      {/* Body states: loading / error / empty / rows */}
+      {loading ? (
+        <div className="px-7 py-10 text-center text-sm text-slate-400">Loading candidates…</div>
+      ) : error ? (
+        <div className="px-7 py-10 text-center text-sm text-red-500">{error}</div>
+      ) : candidates.length === 0 ? (
+        <div
+          className="
             px-7 
             py-10 
             text-center 
             text-sm 
             text-slate-400
-          ">
-
-            No candidates analyzed yet.
-
-          </div>
-
-
-        ) : (
-
-
-          <div className="
+          "
+        >
+          No candidates analyzed yet.
+        </div>
+      ) : (
+        <div
+          className="
             divide-y 
             divide-slate-100
-          ">
-
-
-          {
-            candidates.map((c)=>(
-
-
-              <div
-
-                key={c.id}
-
-                className="
+          "
+        >
+          {candidates.map((c) => (
+            <div
+              key={c.id}
+              className="
                   grid 
                   grid-cols-[48px_1.4fr_0.7fr_0.9fr_0.9fr]
                   items-center 
@@ -297,14 +205,10 @@ export default function CandidateLeaderboard({
                   text-sm 
                   hover:bg-slate-50
                 "
-
-              >
-
-
-
-                {/* Rank */}
-
-                <span className="
+            >
+              {/* Rank */}
+              <span
+                className="
                   flex 
                   h-8 
                   w-8 
@@ -315,36 +219,24 @@ export default function CandidateLeaderboard({
                   text-sm 
                   font-semibold 
                   text-blue-700
-                ">
+                "
+              >
+                {c.rank}
+              </span>
 
-                  {c.rank}
-
-                </span>
-
-
-
-
-
-                {/* Candidate name */}
-
-                <span className="
+              {/* Candidate name (derived from CV filename) */}
+              <span
+                className="
                   font-semibold 
                   text-slate-800
-                ">
+                "
+              >
+                {c.name}
+              </span>
 
-                  {c.name}
-
-                </span>
-
-
-
-
-
-                {/* Score badge */}
-
-                <span
-
-                  className={`
+              {/* Score badge */}
+              <span
+                className={`
                     inline-flex
                     w-fit
                     items-center
@@ -357,22 +249,13 @@ export default function CandidateLeaderboard({
                     font-bold
                     ${getScoreStyle(c.score)}
                   `}
+              >
+                {c.score}/100
+              </span>
 
-                >
-
-                  {c.score}/100
-
-
-                </span>
-
-
-
-
-                {/* Status badge */}
-
-                <span
-
-                  className={`
+              {/* Status badge */}
+              <span
+                className={`
                     inline-flex
                     w-fit
                     items-center
@@ -383,28 +266,17 @@ export default function CandidateLeaderboard({
                     py-1
                     text-xs
                     font-semibold
-                    ${getStatusMeta(statusById[c.id] ?? c.status ?? "pending").className}
+                    ${getStatusMeta(c.status ?? "pending").className}
                   `}
+              >
+                {getStatusMeta(c.status ?? "pending").label}
+              </span>
 
-                >
-
-                  {getStatusMeta(statusById[c.id] ?? c.status ?? "pending").label}
-
-                </span>
-
-
-
-
-
-                {/* Analysis button */}
-
-                <button
-
-                  type="button"
-
-                  onClick={() => handleViewAnalysis(c)}
-
-                  className="
+              {/* Analysis button */}
+              <button
+                type="button"
+                onClick={() => handleViewAnalysis(c)}
+                className="
                     justify-self-end
                     rounded-full
                     border
@@ -417,33 +289,13 @@ export default function CandidateLeaderboard({
                     transition-colors
                     hover:bg-slate-100
                   "
-
-                >
-
-                  View Analysis
-
-
-                </button>
-
-
-
-              </div>
-
-
-            ))
-          }
-
-
-          </div>
-
-
-        )
-      }
-
-
-
+              >
+                View Analysis
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
-
   );
-
 }
