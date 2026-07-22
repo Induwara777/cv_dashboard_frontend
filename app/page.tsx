@@ -19,7 +19,7 @@ export default function Page() {
       <div className="border-b border-slate-300 bg-white px-6 py-4 shadow-sm">
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold text-slate-800">
-            AI Screening Dashboard
+            CV Analyzing Dashboard
           </h1>
           <OllamaStatusIndicator />
         </div>
@@ -28,7 +28,7 @@ export default function Page() {
       {/* Main content - flex row with left and right sections */}
       <div className="flex flex-col md:flex-row">
         {/* LEFT SIDE - Document Upload */}
-        <aside className="w-full md:w-1/3 p-6">
+        <aside className="w-full md:w-[30%] p-6">
           <DocumentUploader onAnalysisComplete={handleAnalysisComplete} />
         </aside>
 
@@ -41,7 +41,7 @@ export default function Page() {
           
           {/* Leaderboard - below stats cards */}
           <div className="mt-6">
-            <CandidateLeaderboard refreshKey={refreshKey} />
+            <CandidateLeaderboard refreshKey={refreshKey}  />
           </div>
         </main>
       </div>

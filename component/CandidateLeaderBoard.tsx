@@ -19,6 +19,8 @@ export interface Candidate {
   name: string; // derived from the CV filename on the backend — never a real extracted name
   score: number; // out of 100
   status?: "pending" | "accepted" | "rejected";
+  experience: number | null; // total years, derived from parsed CV date ranges (year + month)
+  skill_match: number | null; // 0-100, computed from skill + tech skill scores
 
   // Everything below is only present on the detail endpoint
   // (GET /candidates/:id), not the leaderboard list (GET /candidates) —
@@ -28,6 +30,7 @@ export interface Candidate {
   phone?: string | null;
   location?: string | null;
   validation_status?: string;
+  summary?: string | null;
 }
 
 interface CandidateLeaderboardProps {
@@ -115,7 +118,6 @@ export default function CandidateLeaderboard({
     <div
       className="
       w-full 
-      max-w-3xl 
       overflow-hidden 
       rounded-[28px] 
       bg-white 
@@ -145,12 +147,12 @@ export default function CandidateLeaderboard({
         </h2>
       </div>
 
-      {/* Column headers */}
+      {/* Column headers - Reduced gap from gap-6 to gap-2 */}
       <div
         className="
         grid 
-        grid-cols-[48px_1.4fr_0.7fr_0.9fr_0.9fr]
-        gap-4 
+        grid-cols-[30px_1.2fr_0.7fr_0.8fr_1fr_0.8fr_0.7fr]
+        gap-2 
         border-b 
         border-slate-200 
         px-7 
@@ -164,6 +166,8 @@ export default function CandidateLeaderboard({
         <span>#</span>
         <span>CANDIDATE</span>
         <span>SCORE</span>
+        <span>EXPERIENCE</span>
+        <span>SKILL MATCH</span>
         <span>STATUS</span>
         <span className="text-right">ANALYSIS</span>
       </div>
@@ -197,9 +201,9 @@ export default function CandidateLeaderboard({
               key={c.id}
               className="
                   grid 
-                  grid-cols-[48px_1.4fr_0.7fr_0.9fr_0.9fr]
+                  grid-cols-[30px_1.2fr_0.7fr_0.8fr_1fr_0.8fr_0.7fr]
                   items-center 
-                  gap-4 
+                  gap-2 
                   px-7 
                   py-4 
                   text-sm 
@@ -229,6 +233,7 @@ export default function CandidateLeaderboard({
                 className="
                   font-semibold 
                   text-slate-800
+                  whitespace-nowrap
                 "
               >
                 {c.name}
@@ -253,11 +258,51 @@ export default function CandidateLeaderboard({
                 {c.score}/100
               </span>
 
+              {/* Experience (total years) */}
+              <span className="
+              inline-flex
+              w-fit
+              whitespace-nowrap
+              items-center
+              justify-center
+              rounded-lg
+              border
+              border-amber-200
+              bg-amber-50
+              px-3
+              py-1.5
+              text-sm
+              font-semibold
+              text-amber-800
+              "
+              >
+                {c.experience != null ? `${c.experience}` : "—"}
+              </span>
+
+              {/* Skill match percentage */}
+              <div className="flex flex-col gap-1 -translate-y-1 whitespace-nowrap">
+                <span className="text-xs font-bold text-slate-800">
+                  {c.skill_match != null ? `${c.skill_match}% MATCHED` : "—"}
+                </span>
+
+                {c.skill_match != null && (
+                  <div className="h-2 w-24 overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className="h-full rounded-full bg-blue-500"
+                      style={{
+                        width: `${c.skill_match}%`,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+
               {/* Status badge */}
               <span
                 className={`
                     inline-flex
                     w-fit
+                    whitespace-nowrap
                     items-center
                     justify-center
                     rounded-full
@@ -279,6 +324,7 @@ export default function CandidateLeaderboard({
                 className="
                     justify-self-end
                     rounded-full
+                    whitespace-nowrap
                     border
                     border-slate-300
                     px-4

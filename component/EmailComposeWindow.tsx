@@ -8,10 +8,15 @@ import type { Candidate } from "./CandidateLeaderBoard";
 /**
  * EmailComposeWindow
  * -------------------
- * Renders at /candidate/[id]/email — reached by clicking "Accept" on
- * CandidateDetailWindow. Lets the reviewer edit an interview-invitation
- * email before it goes out. Nothing is marked "accepted" until Send Email
- * is actually clicked.
+ * Renders at /candidate/[id]/email — reached by clicking "Accept" (default,
+ * interview invitation) or "Reject" (?type=reject, rejection notice) on
+ * CandidateDetailWindow. Lets the reviewer edit the email before it goes
+ * out. Nothing is marked accepted/rejected until Send is actually clicked.
+ *
+ * MODE:
+ *   Read from the `type` query param: "reject" or anything else (default:
+ *   accept). Drives the header title, default subject/body template, which
+ *   decision gets posted, and the notice value sent back to the detail page.
  *
  * DATA:
  *   Candidate is fetched from GET /candidates/:id, same as the detail page.
@@ -25,10 +30,12 @@ import type { Candidate } from "./CandidateLeaderBoard";
  *   leave client-side.
  *
  * ON SEND:
- *   POSTs { decision: "accepted" } to /candidates/:id/decision — the
- *   backend is the one that actually flips status now, not sessionStorage.
- *   Then clears the local draft and navigates back to
- *   /candidate/:id?notice=email-sent so the detail page shows the banner.
+ *   POSTs { decision: "accepted" | "rejected" } (per mode) to
+ *   /candidates/:id/decision — the backend is the one that actually flips
+ *   status now, not sessionStorage. Then clears the local draft and
+ *   navigates back to /candidate/:id?notice=invitation-sent (accept) or
+ *   ?notice=rejection-sent (reject) so the detail page shows the right
+ *   banner.
  *
  * NOTE: this does not yet actually dispatch an email (no SMTP/email-service
  * call exists in the backend). It only records the accept decision. Wire
@@ -47,11 +54,19 @@ const SENDER_EMAIL = "induwaradilshan7@gmail.com";
 const SIGNATURE =
   `Best regards,\nInduwara Dilshan,\nSenior HR Manager,\nCitizens Development Business Finance PLC.\n${SENDER_EMAIL}`;
 
-function buildDefaultSubject(): string {
-  return "Interview Invitation – [Job Title]";
+type EmailMode = "accept" | "reject";
+
+function getModeFromQuery(): EmailMode {
+  return new URLSearchParams(window.location.search).get("type") === "reject" ? "reject" : "accept";
 }
 
-function buildDefaultBody(candidateName: string): string {
+function buildDefaultSubject(mode: EmailMode): string {
+  return mode === "reject"
+    ? "Application Update – [Job Title]"
+    : "Interview Invitation – [Job Title]";
+}
+
+function buildAcceptBody(candidateName: string): string {
   return `Dear ${candidateName},
 
 Thank you for applying for the [Job Title] position at Citizens Development Business Finance PLC. We are pleased to invite you to the first interview stage.
@@ -69,6 +84,22 @@ We look forward to speaking with you.
 ${SIGNATURE}`;
 }
 
+function buildRejectBody(candidateName: string): string {
+  return `Dear ${candidateName},
+
+Thank you for taking the time to apply for the [Job Title] position at Citizens Development Business Finance PLC and for sharing your background with us.
+
+After careful review, we have decided not to move forward with your application at this time. This decision reflects the specific needs of this role and not the strength of your background — we encourage you to apply for future openings that match your experience.
+
+We wish you every success in your job search.
+
+${SIGNATURE}`;
+}
+
+function buildDefaultBody(candidateName: string, mode: EmailMode): string {
+  return mode === "reject" ? buildRejectBody(candidateName) : buildAcceptBody(candidateName);
+}
+
 function getIdFromPath(): string | null {
   // Route is /candidate/[id]/email — id is the second-to-last segment.
   const segments = window.location.pathname.split("/").filter(Boolean);
@@ -82,6 +113,7 @@ export default function EmailComposeWindow() {
 
   const [candidateId, setCandidateId] = useState<string | null>(null);
   const [candidate, setCandidate] = useState<Candidate | null>(null);
+  const [mode, setMode] = useState<EmailMode>("accept");
   const [toEmail, setToEmail] = useState("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -92,7 +124,9 @@ export default function EmailComposeWindow() {
 
   useEffect(() => {
     const id = getIdFromPath();
+    const currentMode = getModeFromQuery();
     setCandidateId(id);
+    setMode(currentMode);
 
     if (!id) {
       setLoading(false);
@@ -114,13 +148,15 @@ export default function EmailComposeWindow() {
 
         setCandidate(data);
 
-        // Resume a local draft if one exists, otherwise start from the template.
-        const draftRaw = sessionStorage.getItem(`email-draft:${id}`);
+        // Resume a local draft if one exists, otherwise start from the
+        // mode-specific template. Draft key includes mode so an accept
+        // draft and a reject draft for the same candidate don't collide.
+        const draftRaw = sessionStorage.getItem(`email-draft:${id}:${currentMode}`);
         const draft = draftRaw ? JSON.parse(draftRaw) : null;
 
         setToEmail(draft?.toEmail ?? data?.email ?? "");
-        setSubject(draft?.subject ?? buildDefaultSubject());
-        setBody(draft?.body ?? buildDefaultBody(data?.name ?? "[Candidate Name]"));
+        setSubject(draft?.subject ?? buildDefaultSubject(currentMode));
+        setBody(draft?.body ?? buildDefaultBody(data?.name ?? "[Candidate Name]", currentMode));
       } catch (err) {
         console.error("Failed to load candidate", err);
         if (!cancelled) setLoadError("Couldn't load this candidate. Is the API running?");
@@ -141,13 +177,13 @@ export default function EmailComposeWindow() {
     if (!candidateId || loading) return;
     try {
       sessionStorage.setItem(
-        `email-draft:${candidateId}`,
+        `email-draft:${candidateId}:${mode}`,
         JSON.stringify({ toEmail, subject, body })
       );
     } catch (err) {
       console.error("Failed to autosave email draft", err);
     }
-  }, [toEmail, subject, body, candidateId, loading]);
+  }, [toEmail, subject, body, candidateId, mode, loading]);
 
   const handleCancel = () => {
     if (!candidateId) return;
@@ -160,19 +196,26 @@ export default function EmailComposeWindow() {
     setSending(true);
     setSendError(null);
 
+    const decision = mode === "reject" ? "rejected" : "accepted";
+    const notice = mode === "reject" ? "rejection-sent" : "invitation-sent";
+
     try {
       const res = await fetch(`${API_BASE_URL}/candidates/${candidateId}/decision`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision: "accepted" }),
+        body: JSON.stringify({ decision }),
       });
       if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
 
-      sessionStorage.removeItem(`email-draft:${candidateId}`);
-      router.push(`/candidate/${candidateId}?notice=email-sent`);
+      sessionStorage.removeItem(`email-draft:${candidateId}:${mode}`);
+      router.push(`/candidate/${candidateId}?notice=${notice}`);
     } catch (err) {
-      console.error("Failed to record accept decision", err);
-      setSendError("Couldn't send — the decision wasn't saved. Try again.");
+      console.error("Failed to record decision", err);
+      setSendError(
+        mode === "reject"
+          ? "Couldn't send — the rejection wasn't saved. Try again."
+          : "Couldn't send — the decision wasn't saved. Try again."
+      );
     } finally {
       setSending(false);
     }
@@ -215,7 +258,7 @@ export default function EmailComposeWindow() {
         {/* Header */}
         <div className="bg-slate-900 px-7 py-5">
           <h2 className="text-sm font-bold tracking-[0.14em] text-white">
-            INTERVIEW INVITATION EMAIL
+            {mode === "reject" ? "REJECTION EMAIL" : "INTERVIEW INVITATION EMAIL"}
           </h2>
         </div>
 
@@ -287,9 +330,13 @@ export default function EmailComposeWindow() {
               onClick={handleSend}
               disabled={sending || !toEmail.trim()}
               title={!toEmail.trim() ? "Enter a recipient email first" : undefined}
-              className="rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+              className={`rounded-full px-5 py-2 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                mode === "reject"
+                  ? "bg-red-500 hover:bg-red-600"
+                  : "bg-emerald-500 hover:bg-emerald-600"
+              }`}
             >
-              {sending ? "Sending…" : "Send Email"}
+              {sending ? "Sending…" : mode === "reject" ? "Send Rejection" : "Send Email"}
             </button>
           </div>
         </div>

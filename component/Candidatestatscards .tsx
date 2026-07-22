@@ -30,8 +30,8 @@ export default function CandidateStatsCards({ refreshKey }: CandidateStatsCardsP
 
         if (!cancelled) {
           const total = data.length;
-          const passed = data.filter((c: any) => c.status === "accepted").length;
-          const failed = data.filter((c: any) => c.status === "rejected").length;
+          const passed = data.filter((c: any) => c.validation_status === "CORRECT").length;
+          const failed = data.filter((c: any) => c.validation_status === "INCORRECT").length;
           setStats({ total, passed, failed });
         }
       } catch (err) {

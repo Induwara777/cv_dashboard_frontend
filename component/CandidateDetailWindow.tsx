@@ -26,9 +26,10 @@ import type { Candidate } from "./CandidateLeaderBoard";
  *
  * DATA FLOW:
  *   This page fetches its own data from GET /candidates/:id on mount.
- *   EmailComposeWindow is expected to pass an "email-sent" flag back via
- *   the `notice` query param (?notice=email-sent) when it redirects here,
- *   since there's no shared client state between the two routes.
+ *   EmailComposeWindow is expected to pass a notice flag back via the
+ *   `notice` query param (?notice=invitation-sent or ?notice=rejection-sent)
+ *   when it redirects here, since there's no shared client state between
+ *   the two routes.
  */
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -49,8 +50,8 @@ function getIdFromPath(): string | null {
   return fromQuery || fromPath || null;
 }
 
-function getNoticeFromQuery(): boolean {
-  return new URLSearchParams(window.location.search).get("notice") === "email-sent";
+function getNoticeFromQuery(): string | null {
+  return new URLSearchParams(window.location.search).get("notice");
 }
 
 // validation_status comes from score2CLOUD.py's result_val() check during
@@ -93,8 +94,7 @@ export default function CandidateDetailWindow() {
   const [status, setStatus] = useState<NonNullable<Candidate["status"]>>("pending");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [emailSentNotice, setEmailSentNotice] = useState(false);
-  const [rejecting, setRejecting] = useState(false);
+  const [emailSentNotice, setEmailSentNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const id = getIdFromPath();
@@ -135,25 +135,14 @@ export default function CandidateDetailWindow() {
     };
   }, []);
 
-  // Reject is immediate — no email involved. Can still be overridden by
-  // Accept later (which is why this doesn't lock anything).
-  const handleReject = async () => {
-    if (!candidate || !candidateId) return;
-    setRejecting(true);
-    try {
-      const res = await fetch(`${API_BASE_URL}/candidates/${candidateId}/decision`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision: "rejected" }),
-      });
-      if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
-      setStatus("rejected");
-      setCandidate({ ...candidate, status: "rejected" });
-    } catch (err) {
-      console.error("Failed to reject candidate", err);
-    } finally {
-      setRejecting(false);
-    }
+  // Reject now goes through the same compose-then-send flow as Accept, so a
+  // rejection email can be reviewed/edited before the decision is recorded.
+  // Status only becomes "rejected" once EmailComposeWindow posts that
+  // decision after Send is clicked — same pattern as handleAccept below.
+  // Still reversible: a rejected candidate can be Accepted later.
+  const handleReject = () => {
+    if (!candidateId) return;
+    router.push(`/candidate/${candidateId}/email?type=reject`);
   };
 
   // Accept does NOT set status here. It hands off to the email screen —
@@ -187,7 +176,7 @@ export default function CandidateDetailWindow() {
     );
   }
 
-  const { name, score, scores } = candidate;
+  const { name, score, scores, summary } = candidate;
 
   return (
     <div className="min-h-screen bg-slate-50 px-6 py-10">
@@ -268,33 +257,39 @@ export default function CandidateDetailWindow() {
               <button
                 type="button"
                 onClick={handleReject}
-                disabled={isLocked || status === "rejected" || rejecting}
+                disabled={isLocked || status === "rejected"}
                 title={isLocked ? "Already approved — interview email sent" : undefined}
                 className={`rounded-full px-4 py-1.5 text-xs font-semibold text-white transition-colors ${
-                  isLocked || status === "rejected" || rejecting
+                  isLocked || status === "rejected"
                     ? "cursor-not-allowed bg-red-300"
                     : "bg-red-500 hover:bg-red-600"
                 }`}
               >
-                {rejecting ? "…" : "✕ Reject"}
+                ✕ Reject
               </button>
             </div>
           </div>
 
           {/* Status / notice banners */}
-          {emailSentNotice && (
+          {emailSentNotice === "invitation-sent" && (
             <div className="mt-4 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700">
               ✅ Email successfully sent. {name} has been marked as Approved.
             </div>
           )}
 
-          {!emailSentNotice && isLocked && (
+          {emailSentNotice === "rejection-sent" && (
+            <div className="mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-700">
+              ✅ Rejection email sent. {name} has been marked as Not Approved.
+            </div>
+          )}
+
+          {emailSentNotice !== "invitation-sent" && isLocked && (
             <div className="mt-4 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700">
               Approved — interview email already sent. This decision is locked.
             </div>
           )}
 
-          {status === "rejected" && (
+          {emailSentNotice !== "rejection-sent" && status === "rejected" && (
             <div className="mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-700">
               Marked as rejected. You can still change this to Approved later.
             </div>
@@ -319,6 +314,15 @@ export default function CandidateDetailWindow() {
               </div>
             ))}
           </div>
+
+          {summary && (
+            <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="mb-1.5 text-[11px] font-bold tracking-wide text-slate-500">
+                SUMMARY OF CANDIDATE
+              </div>
+              <p className="text-sm leading-relaxed text-slate-600">{summary}</p>
+            </div>
+          )}
         </div>
       </div>
     </div>
