@@ -30,17 +30,15 @@ import type { Candidate } from "./CandidateLeaderBoard";
  *   leave client-side.
  *
  * ON SEND:
- *   POSTs { decision: "accepted" | "rejected" } (per mode) to
- *   /candidates/:id/decision — the backend is the one that actually flips
- *   status now, not sessionStorage. Then clears the local draft and
- *   navigates back to /candidate/:id?notice=invitation-sent (accept) or
+ *   POSTs { to_email, subject, body, decision } to
+ *   /candidates/:id/send-email. The backend sends the email via SMTP and
+ *   only flips decision_status if the send actually succeeds — so a failed
+ *   send leaves the candidate's status untouched and shows an error here
+ *   instead of silently marking them accepted/rejected. On success, clears
+ *   the local draft and navigates back to
+ *   /candidate/:id?notice=invitation-sent (accept) or
  *   ?notice=rejection-sent (reject) so the detail page shows the right
  *   banner.
- *
- * NOTE: this does not yet actually dispatch an email (no SMTP/email-service
- * call exists in the backend). It only records the accept decision. Wire
- * up a real send (e.g. a /candidates/:id/send-invitation endpoint) when
- * you're ready to actually deliver the email.
  */
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -49,7 +47,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 // read-only FROM field and the signature, so they can't drift out of sync
 // like they had (FROM was invisible entirely, and the signature used a
 // different address).
-const SENDER_EMAIL = "induwaradilshan7@gmail.com";
+const SENDER_EMAIL = "harshaniherath2002@gmail.com";
 
 const SIGNATURE =
   `Best regards,\nInduwara Dilshan,\nSenior HR Manager,\nCitizens Development Business Finance PLC.\n${SENDER_EMAIL}`;
@@ -200,22 +198,34 @@ export default function EmailComposeWindow() {
     const notice = mode === "reject" ? "rejection-sent" : "invitation-sent";
 
     try {
-      const res = await fetch(`${API_BASE_URL}/candidates/${candidateId}/decision`, {
+      const res = await fetch(`${API_BASE_URL}/candidates/${candidateId}/send-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision }),
+        body: JSON.stringify({
+          to_email: toEmail,
+          subject,
+          body,
+          decision,
+        }),
       });
-      if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
+      if (!res.ok) {
+        // Backend returns { detail: "..." } for both send failures (502)
+        // and validation errors (400) — surface that instead of a generic message.
+        let detail = `Request failed with status ${res.status}`;
+        try {
+          const errBody = await res.json();
+          if (errBody?.detail) detail = errBody.detail;
+        } catch {
+          // ignore — fall back to the generic message above
+        }
+        throw new Error(detail);
+      }
 
       sessionStorage.removeItem(`email-draft:${candidateId}:${mode}`);
       router.push(`/candidate/${candidateId}?notice=${notice}`);
     } catch (err) {
-      console.error("Failed to record decision", err);
-      setSendError(
-        mode === "reject"
-          ? "Couldn't send — the rejection wasn't saved. Try again."
-          : "Couldn't send — the decision wasn't saved. Try again."
-      );
+      console.error("Failed to send email", err);
+      setSendError(err instanceof Error ? err.message : "Couldn't send the email. Try again.");
     } finally {
       setSending(false);
     }
