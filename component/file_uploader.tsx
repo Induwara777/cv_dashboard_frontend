@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, DragEvent, ChangeEvent } from "react";
+import Link from "next/link";
 import { FilePlus2, FileText, X, Search } from "lucide-react";
 
 interface UploadedFile {
@@ -347,13 +348,12 @@ export default function DocumentUploader({
             <p className="text-sm font-semibold text-emerald-600">
               Data extraction completed
             </p>
-            <a
-              href={`http://localhost:8000/download/excel/${sessionId}`}
-              download
+            <Link
+              href="/directory"
               className="mt-1 inline-block text-sm font-semibold text-slate-700 underline hover:text-slate-900"
             >
-              Download Excel
-            </a>
+              View Candidate Directory
+            </Link>
             <br />
             <a
               href={`http://localhost:8000/download/masked/${sessionId}`}

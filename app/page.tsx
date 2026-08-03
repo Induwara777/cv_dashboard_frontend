@@ -4,10 +4,13 @@ import { useCallback, useState } from "react";
 import DocumentUploader from "@/component/file_uploader";
 import CandidateLeaderboard from "@/component/CandidateLeaderBoard";
 import OllamaStatusIndicator from "@/component/Ollamastatusindicator";
-import CandidateStatsCards from "@/component/Candidatestatscards "
+import CandidateStatsCards from "@/component/Candidatestatscards";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 export default function Page() {
   const [refreshKey, setRefreshKey] = useState(0);
+  const pathname = usePathname();
 
   const handleAnalysisComplete = useCallback(() => {
     setRefreshKey((k) => k + 1);
@@ -18,10 +21,37 @@ export default function Page() {
       {/* Full-width header with border */}
       <div className="border-b border-slate-300 bg-white px-6 py-4 shadow-sm">
         <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold text-slate-800">
-            CV Analyzing Dashboard
-          </h1>
-          <OllamaStatusIndicator />
+          {/* Left side - "CV Analyzing Dashboard" title */}
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold text-slate-800">
+              CV Analyzing Dashboard
+            </h1>
+            <OllamaStatusIndicator />
+          </div>
+          
+          {/* Right side - Navigation links */}
+          <div className="flex items-center gap-6">
+            <Link 
+              href="/" 
+              className={`text-sm font-medium transition-colors ${
+                pathname === "/" 
+                  ? "text-blue-600 border-b-2 border-blue-600 pb-1" 
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Dashboard
+            </Link>
+            <Link 
+              href="/directory" 
+              className={`text-sm font-medium transition-colors ${
+                pathname === "/directory" 
+                  ? "text-blue-600 border-b-2 border-blue-600 pb-1" 
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Candidate Directory
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -41,7 +71,7 @@ export default function Page() {
           
           {/* Leaderboard - below stats cards */}
           <div className="mt-6">
-            <CandidateLeaderboard refreshKey={refreshKey}  />
+            <CandidateLeaderboard refreshKey={refreshKey} />
           </div>
         </main>
       </div>
