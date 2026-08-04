@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Mail, MapPin, ShieldCheck, ShieldAlert, ShieldQuestion } from "lucide-react";
 import type { Candidate } from "./CandidateLeaderBoard";
+import CvViewerModal from "./CvViewerModal";
 
 /**
  * CandidateDetailWindow
@@ -241,6 +242,7 @@ export default function CandidateDetailWindow() {
             </div>
 
             <div className="flex shrink-0 gap-2">
+              {candidateId && <CvViewerModal candidateId={candidateId} />}
               <button
                 type="button"
                 onClick={handleAccept}
