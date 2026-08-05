@@ -18,8 +18,8 @@ export default function Page() {
 
   return (
     <div className="min-h-screen bg-slate-100">
-      {/* Full-width header with border */}
-      <div className="border-b border-slate-300 bg-white px-6 py-4 shadow-sm">
+      {/* Full-width header with light background */}
+      <div className="border-b border-slate-300 bg-indigo-50 px-6 py-4 shadow-sm">
         <div className="flex items-center justify-between">
           {/* Left side - "CV Analyzing Dashboard" title */}
           <div className="flex items-center gap-3">
@@ -29,8 +29,8 @@ export default function Page() {
             <OllamaStatusIndicator />
           </div>
           
-          {/* Right side - Navigation links */}
-          <div className="flex items-center gap-6">
+          {/* Right side - Navigation links with light background */}
+          <div className="flex items-center gap-6 bg-white shadow-sm rounded-lg px-4 py-2">
             <Link 
               href="/" 
               className={`text-sm font-medium transition-colors ${

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Trash2, Loader2 } from "lucide-react";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -54,32 +55,57 @@ export default function CandidateLeaderboard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  // ---- Filter bar state ----
+  // minScore: text so the input can be empty while typing; parsed to a
+  // number (defaulting to 0) only when actually filtering.
+  const [minScoreInput, setMinScoreInput] = useState("");
+  // showCount: text input for number of candidates to show
+  const [showCountInput, setShowCountInput] = useState("10");
 
-    async function loadCandidates() {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch(`${API_BASE_URL}/candidates`);
-        if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
-        const data: Candidate[] = await res.json();
-        if (!cancelled) setCandidates(data);
-      } catch (err) {
-        console.error("Failed to load candidates", err);
-        if (!cancelled) setError("Couldn't load candidates. Is the API running?");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+  // ---- Clear-data state ----
+  // Two-step confirm (not a native confirm() dialog) so it fits the app's
+  // own styling instead of a jarring browser popup.
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [clearError, setClearError] = useState<string | null>(null);
+
+  const loadCandidates = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/candidates`);
+      if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
+      const data: Candidate[] = await res.json();
+      setCandidates(data);
+    } catch (err) {
+      console.error("Failed to load candidates", err);
+      setError("Couldn't load candidates. Is the API running?");
+    } finally {
+      setLoading(false);
     }
+  };
 
+  useEffect(() => {
     loadCandidates();
-    return () => {
-      cancelled = true;
-    };
     // Refetch whenever refreshKey changes (e.g. after a new /analyze run
     // completes), in addition to the initial mount fetch.
   }, [refreshKey]);
+
+  const handleClearData = async () => {
+    setClearing(true);
+    setClearError(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/clear-data`, { method: "POST" });
+      if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
+      setConfirmingClear(false);
+      await loadCandidates(); // refresh the (now empty) list in place
+    } catch (err) {
+      console.error("Failed to clear candidate data", err);
+      setClearError("Couldn't clear data. Is the API running?");
+    } finally {
+      setClearing(false);
+    }
+  };
 
   // Maps a decision status to its display label + badge styling.
   const getStatusMeta = (status: NonNullable<Candidate["status"]>) => {
@@ -114,6 +140,25 @@ export default function CandidateLeaderboard({
     onViewAnalysis?.(candidate);
   };
 
+  // Parsed min-score threshold. Empty input means "no minimum" (0).
+  const minScore = minScoreInput.trim() === "" ? 0 : Number(minScoreInput);
+  
+  // Parse show count. If invalid or empty, default to showing all.
+  const showCount = showCountInput.trim() === "" ? "all" : Number(showCountInput);
+  const shouldShowAll = showCountInput.trim() === "" || isNaN(Number(showCountInput)) || showCountInput === "all";
+
+  // Apply the score floor first, then cap the result to the selected count.
+  // The list from the API already arrives ordered best-score-first (see
+  // db.py's ORDER BY full_score DESC), so slicing after filtering still
+  // gives the top N *of the candidates that pass the score filter* — not
+  // just the top N overall.
+  const filteredCandidates = candidates.filter(
+    (c) => !Number.isNaN(minScore) && c.score >= minScore
+  );
+  const visibleCandidates = shouldShowAll
+    ? filteredCandidates
+    : filteredCandidates.slice(0, Math.max(0, Number(showCount)));
+
   return (
     <div
       className="
@@ -130,6 +175,9 @@ export default function CandidateLeaderboard({
       {/* Header */}
       <div
         className="
+        flex
+        items-center
+        justify-between
         bg-slate-900 
         px-7 
         py-5
@@ -145,6 +193,88 @@ export default function CandidateLeaderboard({
         >
           CANDIDATE LEADERBOARD
         </h2>
+
+        {candidates.length > 0 && (
+          confirmingClear ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-red-300">
+                Clear all {candidates.length} candidates?
+              </span>
+              <button
+                type="button"
+                onClick={handleClearData}
+                disabled={clearing}
+                className="flex items-center gap-1.5 rounded-full bg-red-500 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {clearing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                {clearing ? "Clearing…" : "Yes, clear"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingClear(false)}
+                disabled={clearing}
+                className="rounded-full border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmingClear(true)}
+              className="flex items-center gap-1.5 rounded-full border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
+            >
+              <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
+              Clear Data
+            </button>
+          )
+        )}
+      </div>
+
+      {clearError && (
+        <div className="border-b border-red-200 bg-red-50 px-7 py-2 text-center text-xs font-semibold text-red-600">
+          {clearError}
+        </div>
+      )}
+
+      {/* Filter bar: MINIMUM SCO + result count */}
+      <div className="flex flex-wrap items-center gap-6 border-b border-slate-200 bg-slate-50 px-7 py-3">
+        {/* Min Score Filter */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="min-score-filter" className="text-xs font-bold tracking-wide text-slate-500">
+            MINIMUM SCORE :
+          </label>
+          <input
+            id="min-score-filter"
+            type="number"
+            min={0}
+            max={100}
+            placeholder="0"
+            value={minScoreInput}
+            onChange={(e) => setMinScoreInput(e.target.value)}
+            className="w-20 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-800 outline-none focus:border-blue-400"
+          />
+        </div>
+
+        {/* Show Count Filter - UPDATED with number type and arrows */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="show-count-filter" className="text-xs font-bold tracking-wide text-slate-500">
+            SHOW :
+          </label>
+          <input
+            id="show-count-filter"
+            type="number"
+            min={1}
+            placeholder="10"
+            value={showCountInput}
+            onChange={(e) => setShowCountInput(e.target.value)}
+            className="w-20 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-800 outline-none focus:border-blue-400"
+          />
+        </div>
+
+        <span className="ml-auto text-xs font-medium text-slate-400">
+          Showing {visibleCandidates.length} of {candidates.length}
+        </span>
       </div>
 
       {/* Column headers - Reduced gap from gap-6 to gap-2 */}
@@ -189,6 +319,10 @@ export default function CandidateLeaderboard({
         >
           No candidates analyzed yet.
         </div>
+      ) : visibleCandidates.length === 0 ? (
+        <div className="px-7 py-10 text-center text-sm text-slate-400">
+          No candidates match the current filters.
+        </div>
       ) : (
         <div
           className="
@@ -196,7 +330,7 @@ export default function CandidateLeaderboard({
             divide-slate-100
           "
         >
-          {candidates.map((c) => (
+          {visibleCandidates.map((c) => (
             <div
               key={c.id}
               className="
