@@ -259,7 +259,7 @@ export default function CandidateLeaderboard({
         {/* Show Count Filter - UPDATED with number type and arrows */}
         <div className="flex items-center gap-2">
           <label htmlFor="show-count-filter" className="text-xs font-bold tracking-wide text-slate-500">
-            SHOW :
+            TOP CANDIDATES :
           </label>
           <input
             id="show-count-filter"

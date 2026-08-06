@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState, DragEvent, ChangeEvent } from "react";
+import { useEffect, useRef, useState, DragEvent, ChangeEvent } from "react";
 import Link from "next/link";
-import { FilePlus2, FileText, X, Search } from "lucide-react";
+import { FilePlus2, FileText, X, Search, Check, Loader2 } from "lucide-react";
 
 interface UploadedFile {
   id: string;
@@ -219,6 +219,95 @@ function MultiDropZone({
   );
 }
 
+/* ---------- Full-screen blurred overlay: shown while analyzing, then success/failure ---------- */
+
+interface AnalysisOverlayProps {
+  status: "analyzing" | "completed" | "error";
+  progress: { current: number; total: number; currentCv: string | null } | null;
+  onClose: () => void;
+}
+
+function AnalysisOverlay({ status, progress, onClose }: AnalysisOverlayProps) {
+  const pct =
+    progress && progress.total > 0
+      ? Math.min(100, (progress.current / progress.total) * 100)
+      : 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+      <div className="mx-4 w-full max-w-sm rounded-2xl bg-white p-8 text-center shadow-2xl">
+        {status === "analyzing" && (
+          <>
+            <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-rose-600" strokeWidth={2} />
+
+            <p className="text-base font-bold text-slate-800">
+              {progress && progress.total > 0
+                ? `Analyzing CV ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`
+                : "Starting analysis…"}
+            </p>
+
+            {progress && progress.total > 0 && (
+              <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className="h-full rounded-full bg-rose-600 transition-all duration-500 ease-out"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            )}
+
+            <p className="mt-3 text-xs text-slate-400">
+              This can take a few minutes for larger batches — please don&apos;t close this tab.
+            </p>
+          </>
+        )}
+
+        {status === "completed" && (
+          <>
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">
+              <Check className="h-6 w-6 text-emerald-600" strokeWidth={2.5} />
+            </div>
+
+            <p className="text-base font-bold text-slate-800">Analysis complete</p>
+
+            <p className="mt-1 text-sm text-slate-500">
+              {progress && progress.total > 0
+                ? `${progress.total} CV${progress.total === 1 ? "" : "s"} processed.`
+                : "All done."}
+            </p>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-5 w-full rounded-full bg-slate-900 py-2.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
+            >
+              View Results
+            </button>
+          </>
+        )}
+
+        {status === "error" && (
+          <>
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-rose-100">
+              <X className="h-6 w-6 text-rose-600" strokeWidth={2.5} />
+            </div>
+
+            <p className="text-base font-bold text-slate-800">Something went wrong</p>
+            <p className="mt-1 text-sm text-slate-500">Please try again.</p>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-5 w-full rounded-full bg-slate-900 py-2.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
+            >
+              Close
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Main Component ---------- */
 
 interface DocumentUploaderProps {
@@ -241,6 +330,20 @@ export default function DocumentUploader({
     "idle" | "analyzing" | "completed" | "error"
   >("idle");
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{
+    current: number;
+    total: number;
+    currentCv: string | null;
+  } | null>(null);
+  const [overlayVisible, setOverlayVisible] = useState(false);
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Stop polling if the component unmounts mid-batch.
+  useEffect(() => {
+    return () => {
+      if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
+    };
+  }, []);
 
   const canAnalyze = resumes.length > 0 && Boolean(jobSpec);
 
@@ -258,10 +361,51 @@ export default function DocumentUploader({
     setResumes((prev) => prev.filter((file) => file.id !== id));
   };
 
+  const pollProgress = (id: string) => {
+    const tick = async () => {
+      try {
+        const res = await fetch(
+          `http://localhost:8000/analyze/${id}/progress`
+        );
+
+        if (!res.ok) throw new Error(`Progress check failed with ${res.status}`);
+
+        const data = await res.json();
+
+        setProgress({
+          current: data.current ?? 0,
+          total: data.total ?? 0,
+          currentCv: data.current_cv ?? null,
+        });
+
+        if (data.status === "completed") {
+          setStatus("completed");
+          onAnalysisComplete?.();
+          return;
+        }
+
+        if (data.status === "error") {
+          setStatus("error");
+          return;
+        }
+
+        // still "processing" — check again in 2s
+        pollTimeoutRef.current = setTimeout(tick, 2000);
+      } catch (err) {
+        console.error(err);
+        setStatus("error");
+      }
+    };
+
+    tick();
+  };
+
   const handleAnalyze = async () => {
     if (!canAnalyze || !jobSpec) return;
 
     setStatus("analyzing");
+    setProgress({ current: 0, total: resumes.length, currentCv: null });
+    setOverlayVisible(true);
 
     try {
       const formData = new FormData();
@@ -277,10 +421,18 @@ export default function DocumentUploader({
 
       const data = await res.json();
 
-      if (data.status === "completed") {
+      // /analyze now returns immediately once Phase 0-3 are done and the
+      // slow per-CV extraction+scoring loop has started in the background.
+      // We poll GET /analyze/:session_id/progress from here to find out
+      // when it's actually finished.
+      if (data.status === "processing" && data.session_id) {
         setSessionId(data.session_id);
-        setStatus("completed");
-        onAnalysisComplete?.();
+        setProgress({
+          current: 0,
+          total: data.total ?? resumes.length,
+          currentCv: null,
+        });
+        pollProgress(data.session_id);
       } else {
         setStatus("error");
       }
@@ -291,9 +443,19 @@ export default function DocumentUploader({
   };
 
   return (
-    // REMOVED: min-h-screen, items-center, justify-center, bg-slate-100, p-6
-    // Now it's just a card that fits in the parent layout
-    <div className="w-full overflow-hidden rounded-[28px] bg-white shadow-xl shadow-slate-300/40 ring-1 ring-slate-200">
+    <>
+      {overlayVisible &&
+        (status === "analyzing" || status === "completed" || status === "error") && (
+          <AnalysisOverlay
+            status={status}
+            progress={progress}
+            onClose={() => setOverlayVisible(false)}
+          />
+        )}
+
+      {/* REMOVED: min-h-screen, items-center, justify-center, bg-slate-100, p-6 */}
+      {/* Now it's just a card that fits in the parent layout */}
+      <div className="w-full overflow-hidden rounded-[28px] bg-white shadow-xl shadow-slate-300/40 ring-1 ring-slate-200">
       {/* Header */}
       <div className="bg-slate-900 px-7 py-5">
         <h2 className="text-sm font-bold tracking-[0.14em] text-white">
@@ -340,8 +502,31 @@ export default function DocumentUploader({
           ].join(" ")}
         >
           <Search className="h-4 w-4" strokeWidth={2.5} />
-          {status === "analyzing" ? "Analyzing…" : "Analyze Candidates"}
+          {status === "analyzing"
+            ? progress && progress.total > 0
+              ? `Analyzing CV ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`
+              : "Analyzing…"
+            : "Analyze Candidates"}
         </button>
+
+        {status === "analyzing" && progress && progress.total > 0 && (
+          <div className="mt-3">
+            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
+              <div
+                className="h-full rounded-full bg-rose-600 transition-all duration-500 ease-out"
+                style={{
+                  width: `${Math.min(
+                    100,
+                    (progress.current / progress.total) * 100
+                  )}%`,
+                }}
+              />
+            </div>
+            <p className="mt-2 text-center text-xs font-medium text-slate-500">
+              {progress.current} of {progress.total} CVs completed
+            </p>
+          </div>
+        )}
 
         {status === "completed" && sessionId && (
           <div className="mt-3 text-center">
@@ -380,5 +565,6 @@ export default function DocumentUploader({
         )}
       </div>
     </div>
+    </>
   );
 }

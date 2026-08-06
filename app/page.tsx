@@ -3,7 +3,6 @@
 import { useCallback, useState } from "react";
 import DocumentUploader from "@/component/file_uploader";
 import CandidateLeaderboard from "@/component/CandidateLeaderBoard";
-import OllamaStatusIndicator from "@/component/Ollamastatusindicator";
 import CandidateStatsCards from "@/component/Candidatestatscards";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -19,14 +18,13 @@ export default function Page() {
   return (
     <div className="min-h-screen bg-slate-100">
       {/* Full-width header with light background */}
-      <div className="border-b border-slate-300 bg-indigo-50 px-6 py-4 shadow-sm">
+      <div className="border-b border-blue-300 bg-blue-100 px-6 py-4 shadow-sm">
         <div className="flex items-center justify-between">
           {/* Left side - "CV Analyzing Dashboard" title */}
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold text-slate-800">
               CV Analyzing Dashboard
             </h1>
-            <OllamaStatusIndicator />
           </div>
           
           {/* Right side - Navigation links with light background */}
